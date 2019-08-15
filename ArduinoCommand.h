@@ -58,7 +58,7 @@ class ArduinoCommand {
                 printResponse(false, PSTR("config_too_long"));
             }
         }
-        void readSerial() {
+        void read() {
             // check if we have data waiting
             while (mStream->available()) {
                 // handle potential overflow
