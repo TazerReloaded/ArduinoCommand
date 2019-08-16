@@ -43,9 +43,6 @@ uint16_t crc16_ccitt(const char *data, const uint16_t length) {
 
 class ArduinoCommand {
     public:
-        typedef struct {
-            const char *command PROGMEM;
-        } CommandDefinition;
         ArduinoCommand(Stream *port) {
             mStream = port;
         }
