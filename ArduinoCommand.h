@@ -6,6 +6,9 @@
 #ifndef ARDUINO_COMMAND_ARGS_SIZE
 #define ARDUINO_COMMAND_ARGS_SIZE 5
 #endif
+#ifndef ARDUINO_COMMAND_COUNT
+#define ARDUINO_COMMAND_COUNT 0
+#endif
 #ifndef ARDUINO_COMMAND_ECHO
 #define ARDUINO_COMMAND_ECHO false
 #endif
@@ -43,16 +46,18 @@ uint16_t crc16_ccitt(const char *data, const uint16_t length) {
 
 class ArduinoCommand {
     public:
-        ArduinoCommand(Stream *port) {
-            mStream = port;
+        typedef struct {
+            const char *Command;
+            void (*Callback)(const uint8_t argc, const char **argv);
+        } ArduinoCommandInfo;
+        ArduinoCommand(Stream *stream) {
+            mStream = stream;
         }
-        void addCommand(const char *command, const void (*callback)(const uint8_t argc, const char **argv)) {
-            if (mCommandCount < ARDUINO_COMMAND_SIZE) {
-                mCommands[mCommandCount] = command;
-                mCallbacks[mCommandCount] = callback;
-                mCommandCount++;
+        void addCommand(const char *command, void (*callback)(const uint8_t argc, const char **argv)) {
+            if (mCommandCount >= ARDUINO_COMMAND_COUNT) {
+                printResponse(false, PSTR("config_overflow"));
             } else {
-                printResponse(false, PSTR("config_too_long"));
+                mCommands[mCommandCount++] = { command, callback };
             }
         }
         void read() {
@@ -110,16 +115,15 @@ class ArduinoCommand {
         }
     private:
         #if ARDUINO_COMMAND_BUFFER_SIZE > 256
-            uint16_t mBufferPos = 0;
+            uint16_t mBufferPos;
         #else
-            uint8_t mBufferPos = 0;
+            uint8_t mBufferPos;
         #endif
         Stream *mStream;
+        ArduinoCommandInfo mCommands[ARDUINO_COMMAND_COUNT];
         uint8_t mCommandCount = 0;
         char mBuffer[ARDUINO_COMMAND_BUFFER_SIZE];
         const char *mArgs[ARDUINO_COMMAND_ARGS_SIZE];
-        const char *mCommands[ARDUINO_COMMAND_SIZE];
-        const void (*mCallbacks[ARDUINO_COMMAND_SIZE])(const uint8_t argc, const char **argv);
         bool checkSnprintf(int written, int n) {
             if (written < 0) {
                 // cannot parse format string
@@ -134,7 +138,11 @@ class ArduinoCommand {
         }
         void processCommand(int len) {
             // insert null byte instead of linebreak at the end
-            mBuffer[len - 1] = 0x00;
+            if (mBuffer[len - 2] == 13) {
+                mBuffer[len - 2] = 0x00;
+            } else {
+                mBuffer[len - 1] = 0x00;
+            }
 
             // check CRC if present
             char *crc = strchr(mBuffer, '*');
@@ -148,14 +156,14 @@ class ArduinoCommand {
 
             // evaluate command
             for (uint8_t i = 0; i < mCommandCount; i++) {
-                if (strstr_P(mBuffer, mCommands[i]) == mBuffer) {
+                if (strstr_P(mBuffer, mCommands[i].Command) == mBuffer) {
                     // clear the args and loop over every arg separated by a space
                     // by using a string tokenizer which replaces spaces by null bytes
                     for (int i = 0; i < ARDUINO_COMMAND_ARGS_SIZE; i++) {
                         mArgs[i] = NULL;
                     }
                     uint8_t pos = 0;
-                    char *ptr = strtok_P(&mBuffer[strlen_P(mCommands[i])], PSTR(" "));
+                    char *ptr = strtok_P(&mBuffer[strlen_P(mCommands[i].Command)], PSTR(" "));
                     while (ptr != NULL) {
                         // check for overflow
                         if (pos >= ARDUINO_COMMAND_ARGS_SIZE) {
@@ -166,7 +174,7 @@ class ArduinoCommand {
                         mArgs[pos++] = ptr;
                         ptr = strtok_P(NULL, PSTR(" "));
                     }
-                    mCallbacks[i](pos, mArgs);
+                    mCommands[i].Callback(pos, mArgs);
                     return;
                 }
             }
