@@ -76,10 +76,10 @@ class ArduinoCommand {
                     mStream->write(mBuffer[mBufferPos]);
                 }
                 
-                if (mBuffer[mBufferPos] == 10) {
-                    // newline detected, handle command
+                if (mBuffer[mBufferPos] == 13 || mBuffer[mBufferPos] == 10) {
+                    // delimiter detected (CR or LF), handle command
                     processCommand(mBufferPos + 1);
-                    // line break received, reset position
+                    // reset position
                     mBufferPos = 0;
                 }
                 else {
@@ -137,12 +137,8 @@ class ArduinoCommand {
             return true;
         }
         void processCommand(int len) {
-            // insert null byte instead of linebreak at the end
-            if (mBuffer[len - 2] == 13) {
-                mBuffer[len - 2] = 0x00;
-            } else {
-                mBuffer[len - 1] = 0x00;
-            }
+            // insert null byte instead of delimiter at the end
+            mBuffer[len - 1] = 0x00;
 
             // check CRC if present
             char *crc = strchr(mBuffer, '*');
