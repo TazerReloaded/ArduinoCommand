@@ -6,8 +6,8 @@
 #ifndef ARDUINO_COMMAND_ARGS_SIZE
 #define ARDUINO_COMMAND_ARGS_SIZE 5
 #endif
-#ifndef ARDUINO_COMMAND_COUNT
-#define ARDUINO_COMMAND_COUNT 0
+#ifndef ARDUINO_COMMAND_NAME_SIZE
+#define ARDUINO_COMMAND_NAME_SIZE 16
 #endif
 #ifndef ARDUINO_COMMAND_ECHO
 #define ARDUINO_COMMAND_ECHO false
@@ -47,18 +47,15 @@ uint16_t crc16_ccitt(const char *data, const uint16_t length) {
 class ArduinoCommand {
     public:
         typedef struct {
-            const char *Command;
+            char Command[ARDUINO_COMMAND_NAME_SIZE];
             void (*Callback)(const uint8_t argc, const char **argv);
         } ArduinoCommandInfo;
         ArduinoCommand(Stream *stream) {
             mStream = stream;
         }
-        void addCommand(const char *command, void (*callback)(const uint8_t argc, const char **argv)) {
-            if (mCommandCount >= ARDUINO_COMMAND_COUNT) {
-                printResponse(false, PSTR("config_overflow"));
-            } else {
-                mCommands[mCommandCount++] = { command, callback };
-            }
+        void setCommands(const ArduinoCommandInfo *commands, uint8_t commandCount) {
+            mCommands = commands;
+            mCommandCount = commandCount;
         }
         void read() {
             // check if we have data waiting
@@ -120,7 +117,7 @@ class ArduinoCommand {
             uint8_t mBufferPos;
         #endif
         Stream *mStream;
-        ArduinoCommandInfo mCommands[ARDUINO_COMMAND_COUNT];
+        const ArduinoCommandInfo *mCommands;
         uint8_t mCommandCount = 0;
         char mBuffer[ARDUINO_COMMAND_BUFFER_SIZE];
         const char *mArgs[ARDUINO_COMMAND_ARGS_SIZE];
