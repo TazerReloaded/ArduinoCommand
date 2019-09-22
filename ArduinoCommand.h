@@ -158,14 +158,16 @@ class ArduinoCommand {
                     uint8_t pos = 0;
                     char *ptr = strtok_P(&mBuffer[strlen_P(mCommands[i].Command)], PSTR(" "));
                     while (ptr != NULL) {
-                        // check for overflow
+                        // check for overflow and skip CRC
                         if (pos >= ARDUINO_COMMAND_ARGS_SIZE) {
                             printResponse(false, PSTR("args_overflow"));
                             return;
+                        } else if (crc != NULL && ptr == crc - 1) {
+                            break;
                         }
                         // find next token until end
                         mArgs[pos++] = ptr;
-                        ptr = strtok_P(NULL, PSTR(" "));
+                        ptr = strtok_P(NULL, PSTR(" "));                        
                     }
                     mCommands[i].Callback(pos, mArgs);
                     return;
