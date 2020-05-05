@@ -35,11 +35,9 @@ const uint16_t crc16_ccitt_table[256] PROGMEM = {
 
 // get the crc16_ccitt of the given buffer from program memory
 uint16_t crc16_ccitt(const char *data, const uint16_t length) {
-    uint16_t tmp;
     uint16_t crc = 0xffff;
     for (uint16_t count = 0; count < length; ++count) {
-        tmp = (*data++ ^ (crc >> 8)) & 0xff;
-        crc = pgm_read_word(&crc16_ccitt_table[tmp]) ^ (crc << 8);
+        crc = pgm_read_word(&crc16_ccitt_table[(*data++ ^ (crc >> 8)) & 0xff]) ^ (crc << 8);
     }
     return crc;
 }
@@ -57,12 +55,13 @@ class ArduinoCommand {
             mCommands = commands;
             mCommandCount = commandCount;
         }
+        // checks for new data, should be called every loop()
         void read() {
             // check if we have data waiting
             while (mStream->available()) {
                 // handle potential overflow
                 if (mBufferPos >= ARDUINO_COMMAND_BUFFER_SIZE) {
-                    printResponse(false, PSTR("in_buffer_overflow"));
+                    respond_P(false, PSTR("in_buffer_overflow"));
                     mBufferPos = 0;
                 }
                 
@@ -85,50 +84,90 @@ class ArduinoCommand {
                 }
             }
         }
-        void printResponse(const bool success, const char *format, ...) {
+        // prints just an ok response without any data, equivalent to respond(true, NULL)
+        void respondOK() {
+            processResponse(true, true, NULL, NULL);
+        }
+        // prints a response with format string in RAM
+        void respond(const bool success, const char *format, ...) {
             va_list args;
             va_start(args, format);
-            // write message content to buffer
-            if (format != NULL) {
-                sprintf_P(mBuffer, success ? PSTR("ok ") : PSTR("err "));
-                mBufferPos = ARDUINO_COMMAND_BUFFER_SIZE - strlen(mBuffer);
-                if (!checkSnprintf(vsnprintf_P(&mBuffer[strlen(mBuffer)], mBufferPos, format, args), mBufferPos)) {
-                    mBufferPos = 0;
-                    return;
-                }
-            } else {
-                sprintf_P(mBuffer, success ? PSTR("ok") : PSTR("err"));
-            }
-            // calculate crc over buffer content
-            mBufferPos = ARDUINO_COMMAND_BUFFER_SIZE - strlen(mBuffer);
-            if (!checkSnprintf(snprintf_P(&mBuffer[strlen(mBuffer)], mBufferPos, PSTR(" *%x\n"), crc16_ccitt(mBuffer, strlen(mBuffer))), mBufferPos)) {
-                mBufferPos = 0;
-                return;
-            }
-            // write full buffer (preamble, message, crc) to stream
-            mStream->write(mBuffer, strlen(mBuffer));
-            mBufferPos = 0;
+            processResponse(false, success, format, args);
+            va_end(args);
+        }
+        // prints a response with format string in PROGMEM
+        void respond_P(const bool success, const char *format, ...) {
+            va_list args;
+            va_start(args, format);
+            processResponse(true, success, format, args);
             va_end(args);
         }
     private:
         #if ARDUINO_COMMAND_BUFFER_SIZE > 256
-            uint16_t mBufferPos;
+            uint16_t mBufferPos = 0;
         #else
-            uint8_t mBufferPos;
+            uint8_t mBufferPos = 0;
         #endif
         Stream *mStream;
         const ArduinoCommandInfo *mCommands;
         uint8_t mCommandCount = 0;
         char mBuffer[ARDUINO_COMMAND_BUFFER_SIZE];
         const char *mArgs[ARDUINO_COMMAND_ARGS_SIZE];
+        void processResponse(const bool formatInProgmem, const bool success, const char *format, va_list args) {
+            bool result;
+            // write message content to buffer
+            if (format != NULL) {
+                // we have a format, write status text
+                sprintf_P(mBuffer, success ? PSTR("ok ") : PSTR("err "));
+                mBufferPos = ARDUINO_COMMAND_BUFFER_SIZE - strlen(mBuffer);
+                // process format string and args
+                if (formatInProgmem) {
+                    result = checkSnprintf(
+                        vsnprintf_P(&mBuffer[strlen(mBuffer)], mBufferPos, format, args),
+                        mBufferPos
+                    );
+                } else {
+                    result = checkSnprintf(
+                        vsnprintf(&mBuffer[strlen(mBuffer)], mBufferPos, format, args),
+                        mBufferPos
+                    );
+                }
+                if (!result) {
+                    // buffer write failed, quit here
+                    return;
+                }
+            } else {
+                // no format specified, just print status text
+                sprintf_P(mBuffer, success ? PSTR("ok") : PSTR("err"));
+            }
+            // calculate crc over buffer content and append
+            mBufferPos = ARDUINO_COMMAND_BUFFER_SIZE - strlen(mBuffer);
+            result = checkSnprintf(
+                snprintf_P(
+                    &mBuffer[strlen(mBuffer)],
+                    mBufferPos,
+                    PSTR(" *%x\n"),
+                    crc16_ccitt(mBuffer, strlen(mBuffer))
+                ),
+                mBufferPos
+            );
+            if (!result) {
+                // buffer write failed, quit here
+                return;
+            }
+            // write full buffer (preamble, message, crc) to stream
+            mStream->write(mBuffer, strlen(mBuffer));
+            // reset position and free args
+            mBufferPos = 0;
+        }
         bool checkSnprintf(int written, int n) {
             if (written < 0) {
                 // cannot parse format string
-                printResponse(false, PSTR("format_error"));
+                respond_P(false, PSTR("format_error"));
                 return false;
             } else if (written > n) {
                 // string does not fit in buffer
-                printResponse(false, PSTR("out_buffer_overflow"));
+                respond_P(false, PSTR("out_buffer_overflow"));
                 return false;
             }
             return true;
@@ -142,7 +181,7 @@ class ArduinoCommand {
             if (crc != NULL) {
                 crc++;
                 if (strtoul(crc, NULL, 16) != crc16_ccitt(mBuffer, len - strlen(crc) - 3)) {
-                    printResponse(false, PSTR("crc_mismatch"));
+                    respond_P(false, PSTR("crc_mismatch"));
                     return;
                 }
             }
@@ -152,15 +191,15 @@ class ArduinoCommand {
                 if (strstr_P(mBuffer, mCommands[i].Command) == mBuffer) {
                     // clear the args and loop over every arg separated by a space
                     // by using a string tokenizer which replaces spaces by null bytes
-                    for (int i = 0; i < ARDUINO_COMMAND_ARGS_SIZE; i++) {
-                        mArgs[i] = NULL;
+                    for (int j = 0; j < ARDUINO_COMMAND_ARGS_SIZE; j++) {
+                        mArgs[j] = NULL;
                     }
                     uint8_t pos = 0;
                     char *ptr = strtok_P(&mBuffer[strlen_P(mCommands[i].Command)], PSTR(" "));
                     while (ptr != NULL) {
                         // check for overflow and skip CRC
                         if (pos >= ARDUINO_COMMAND_ARGS_SIZE) {
-                            printResponse(false, PSTR("args_overflow"));
+                            respond_P(false, PSTR("args_overflow"));
                             return;
                         } else if (crc != NULL && ptr == crc - 1) {
                             break;
@@ -173,7 +212,7 @@ class ArduinoCommand {
                     return;
                 }
             }
-            printResponse(false, PSTR("unknown_command"));
+            respond_P(false, PSTR("unknown_command"));
         }
 };
 
